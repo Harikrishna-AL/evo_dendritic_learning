@@ -87,6 +87,15 @@ def train_split_mnist():
         if freeze:
             print("Freezing old branches for all active models!")
         
+        # Sleep Phase: Generate Dream Bank for past classes
+        dream_bank = {}
+        if task_idx > 0:
+            print("\n  [SLEEP PHASE] Dreaming past classes for Pseudo-Rehearsal...")
+            for past_c in range(0, task_idx * 2): # past classes
+                # Dream 500 images per past class
+                dream_bank[past_c] = models[past_c].dream(batch_size=500, iterations=50, lr=0.1)
+                print(f"    - Network {past_c} dreamed 500 images.")
+                
         # We'll do 20 epochs per task
         for epoch in range(20):
             total_loss = 0.0
@@ -96,10 +105,29 @@ def train_split_mnist():
                 data = data.to(device)
                 data = data.view(data.size(0), -1)
                 
-                # Train only the networks responsible for the active classes
-                # For each active class, it should output 1.0 for its own images, and 0.0 for the OTHER active class.
+                # Mix in dreamed data if we have past classes
+                if dream_bank:
+                    mixed_data = [data]
+                    mixed_targets = [target]
+                    for past_c, dreams in dream_bank.items():
+                        # Sample 32 dreams per past class for this batch
+                        idx = torch.randperm(dreams.size(0))[:32]
+                        mixed_data.append(dreams[idx])
+                        mixed_targets.append(torch.full((32,), past_c, dtype=target.dtype, device=device))
+                    
+                    data = torch.cat(mixed_data, dim=0)
+                    target = torch.cat(mixed_targets, dim=0)
+                    
+                    # Shuffle mixed batch
+                    perm = torch.randperm(data.size(0))
+                    data = data[perm]
+                    target = target[perm]
+                
+                # Train all networks we've seen so far
+                current_known_classes = list(range(0, task_idx * 2 + 2))
+                
                 batch_loss = 0.0
-                for c in active_classes:
+                for c in current_known_classes:
                     model_c = models[c]
                     # Target is 1.0 if the image belongs to class c, else 0.0
                     y_c = (target == c).float().unsqueeze(1).to(device)
@@ -109,7 +137,7 @@ def train_split_mnist():
                     loss_c = model_c.backward_and_update(y_c, active_classes=[0], freeze_old_branches=freeze)
                     batch_loss += loss_c
                     
-                total_loss += batch_loss / len(active_classes)
+                total_loss += batch_loss / len(current_known_classes)
                 batches += 1
                 
             avg_loss = total_loss / batches

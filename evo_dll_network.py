@@ -163,3 +163,34 @@ class EvoDLLNetwork(object):
             self.add_branch()
             
         return current_error
+
+    def dream(self, batch_size=128, iterations=50, lr=0.1):
+        """
+        Native Dendritic Dreaming.
+        Starts with random noise and uses the frozen dendritic branches to pass 
+        error backward to the pixels, hallucinating features that maximize 
+        this network's activation (output -> 1.0).
+        """
+        x_dream = torch.rand(batch_size, self.input_dim).to(self.device)
+        
+        for _ in range(iterations):
+            # 1. Forward pass to get activations
+            u_soma = self.forward(x_dream)
+            
+            # 2. We want u_soma to be 1.0 (perfect excitation)
+            e_soma = 1.0 - u_soma
+            
+            # 3. Propagate error backward to the branches
+            e_branches = self.soma.backward(e_soma, sigma=1.0)
+            
+            # 4. Propagate error backward to the pixels (DeepDream step)
+            e_input = torch.zeros_like(x_dream)
+            for i, branch in enumerate(self.branches):
+                e_b = e_branches[:, i:i+1]
+                e_input += branch.backward(e_b, sigma=1.0)
+                
+            # 5. Update pixels
+            x_dream += lr * e_input
+            x_dream = torch.clamp(x_dream, 0.0, 1.0) # Keep valid pixel range
+            
+        return x_dream.detach()
