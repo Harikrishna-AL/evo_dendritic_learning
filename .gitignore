@@ -7,3 +7,4 @@ dist/
 *.egg-info/
 data/
 dendritic_advantage.py
+implementation_plan.md
